@@ -13,8 +13,12 @@
         .setup-bar button:hover { background: #007acc; }
         .setup-bar .btn-import { background: #ff9900; }
         .setup-bar .btn-import:hover { background: #cc7a00; }
+        .setup-bar .btn-save { background: #28a745; margin-left: auto; }
+        .setup-bar .btn-save:hover { background: #218838; }
         
-        /* Modificata l'area audio per il mobile */
+        .level-selector { display: flex; align-items: center; gap: 5px; padding-right: 15px; border-right: 2px solid #444; }
+        .level-selector input { width: 40px !important; }
+
         .audio-section { background: #2a2a35; padding: 15px; border-radius: 5px; display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box; border: 1px solid #444; margin-bottom: 15px; }
         .audio-section input[type="file"] { color: #fff; width: 100%; }
         audio { width: 100%; height: 40px; outline: none; }
@@ -62,10 +66,17 @@
     </div>
 
     <div class="setup-bar">
+        <div class="level-selector">
+            <label>ID Livello: </label>
+            <input type="number" id="levelId" value="1" min="1">
+        </div>
         <label>Min: <input type="number" id="min" value="1" min="0"></label>
         <label>Sec: <input type="number" id="sec" value="30" min="0" max="59"></label>
         <button onclick="resizeGrid()">2. Pulisci Mappa</button>
         <button class="btn-import" onclick="loadLevel()">Carica da Testo in basso</button>
+        
+        <!-- Nuovo pulsante di esportazione -->
+        <button class="btn-save" onclick="downloadLevelFile()">⬇️ Salva File TXT</button>
     </div>
 
     <div class="toolbar" id="toolbar">
@@ -253,6 +264,30 @@
                 }
             }
             renderGrid();
+        }
+
+        // --- NUOVA FUNZIONE DI ESPORTAZIONE ---
+        function downloadLevelFile() {
+            const levelId = document.getElementById('levelId').value || "1";
+            const fileName = `level${levelId}.txt`;
+            const textContent = outputEl.value;
+
+            if(!textContent) {
+                alert("La mappa è vuota!");
+                return;
+            }
+
+            const blob = new Blob([textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         document.getElementById('toolbar').addEventListener('click', (e) => {
