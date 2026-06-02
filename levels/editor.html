@@ -38,7 +38,7 @@
         .cell { width: 30px; height: 30px; background: #111; display: flex; align-items: center; justify-content: center; font-family: monospace; font-size: 18px; cursor: pointer; user-select: none; }
         
         .cell[data-val="."] { background: #2a3b4c; color: transparent; } 
-        .cell[data-val="_"] { background: #888; color: white; } 
+        .cell[data-val="="] { background: #ffffff; color: #000; } 
         .cell[data-val="#"] { background: #0099ff; border: 2px solid #000; box-sizing: border-box; } 
         .cell[data-val="^"] { background: #2a3b4c; color: yellow; font-size: 24px; } 
 
@@ -48,7 +48,7 @@
         #warning { font-weight: bold; min-height: 20px; margin-bottom: 10px; }
         #info { color: #0099ff; font-weight: bold; margin-bottom: 10px; font-size: 14px; }
         
-        textarea { width: 100%; height: 120px; background: #111; color: #0f0; font-family: monospace; border: none; padding: 10px; box-sizing: border-box; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
+        textarea { width: 100%; height: 160px; background: #111; color: #0f0; font-family: monospace; border: none; padding: 10px; box-sizing: border-box; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
     </style>
 </head>
 <body>
@@ -73,9 +73,10 @@
             <input type="number" id="levelId" value="1" min="1">
             <button class="btn-github" onclick="fetchFromGitHub()">☁️ Scarica da GitHub</button>
         </div>
+        <label>Righe: <input type="number" id="rowsInput" value="10" min="4" max="50"></label>
         <label>Min: <input type="number" id="min" value="1" min="0"></label>
         <label>Sec: <input type="number" id="sec" value="30" min="0" max="59"></label>
-        <button onclick="resizeGrid()">2. Pulisci Mappa</button>
+        <button onclick="resizeGrid()">2. Applica/Pulisci Mappa</button>
         <button class="btn-import" onclick="loadLevel()">Carica da Testo in basso</button>
         
         <button class="btn-save" onclick="downloadLevelFile()">⬇️ Salva File TXT</button>
@@ -83,12 +84,12 @@
 
     <div class="toolbar" id="toolbar">
         <div class="tool active" data-brush=".">Aria (.)</div>
-        <div class="tool" data-brush="_">Pav. (_)</div>
+        <div class="tool" data-brush="=">Pavimento (=)</div>
         <div class="tool" data-brush="#">Blocco (#)</div>
         <div class="tool" data-brush="^">Spina (^)</div>
     </div>
     
-    <div id="info">Durata attuale: 1m 30s (900 blocchi). Velocità: 10 blocchi/sec.</div>
+    <div id="info">Durata attuale: 1m 30s (900 blocchi). Righe: 10. Velocità: 10 blocchi/sec.</div>
     <div id="warning">✔️ Livello fisicamente possibile.</div>
 
     <div class="grid-container">
@@ -100,9 +101,311 @@
 
     <script>
         let COLS = 900; 
-        const ROWS = 4;
+        let ROWS = parseInt(document.getElementById('rowsInput').value) || 10;
         let currentBrush = '.';
         const gridEl = document.getElementById('grid');
+        const outputEl = document.getElementById('output');
+        const warningEl = document.getElementById('warning');
+        const infoEl = document.getElementById('info');
+        let mapData = [];
+        let beatColumns = new Set();
+        let lastCursorCol = -1;
+
+        const audioInput = document.getElementById('audioInput');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const analysisStatus = document.getElementById('analysisStatus');
+
+        function skipAudio(seconds) {
+            if (audioPlayer.src) {
+                audioPlayer.currentTime += seconds;
+            }
+        }
+
+        audioInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const objectUrl = URL.createObjectURL(file);
+            audioPlayer.src = objectUrl;
+
+            analysisStatus.innerText = "Analisi basse frequenze in corso (potrebbe richiedere qualche secondo)...";
+            
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                const duration = audioBuffer.duration;
+                document.getElementById('min').value = Math.floor(duration / 60);
+                document.getElementById('sec').value = Math.floor(duration % 60);
+                resizeGrid();
+
+                const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+                const source = offlineCtx.createBufferSource();
+                source.buffer = audioBuffer;
+
+                const filter = offlineCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.value = 120; 
+
+                source.connect(filter);
+                filter.connect(offlineCtx.destination);
+                source.start();
+
+                const renderedBuffer = await offlineCtx.startRendering();
+                const data = renderedBuffer.getChannelData(0);
+
+                const samplesPerBlock = Math.floor(audioBuffer.sampleRate / 10);
+                const energies = [];
+                
+                for (let i = 0; i < COLS; i++) {
+                    let sum = 0;
+                    const start = i * samplesPerBlock;
+                    const end = Math.min(start + samplesPerBlock, data.length);
+                    if (start >= data.length) break;
+                    
+                    for (let j = start; j < end; j++) {
+                        sum += data[j] * data[j];
+                    }
+                    energies.push(Math.sqrt(sum / (end - start)));
+                }
+
+                beatColumns.clear();
+                const avgEnergy = energies.reduce((a, b) => a + b, 0) / energies.length;
+                const threshold = avgEnergy * 1.8; 
+
+                for (let i = 1; i < energies.length - 1; i++) {
+                    if (energies[i] > threshold && energies[i] > energies[i-1] && energies[i] > energies[i+1]) {
+                        beatColumns.add(i);
+                    }
+                }
+
+                analysisStatus.innerText = `Analisi completata. Trovati ${beatColumns.size} picchi ritmici. Ora puoi usare il player.`;
+                renderGrid(); 
+
+            } catch (err) {
+                console.error(err);
+                analysisStatus.innerText = "Errore durante l'analisi audio. Il player funzionerà comunque.";
+            }
+        });
+
+        audioPlayer.addEventListener('timeupdate', () => {
+            if (audioPlayer.paused && audioPlayer.currentTime === 0) return;
+            const currentSec = audioPlayer.currentTime;
+            const currentCol = Math.floor(currentSec * 10);
+            
+            if (currentCol !== lastCursorCol && currentCol < COLS) {
+                if (lastCursorCol >= 0) {
+                    for (let r = 0; r < ROWS; r++) {
+                        const cell = document.getElementById(`cell-${r}-${lastCursorCol}`);
+                        if (cell) cell.classList.remove('play-cursor');
+                    }
+                }
+                for (let r = 0; r < ROWS; r++) {
+                    const cell = document.getElementById(`cell-${r}-${currentCol}`);
+                    if (cell) cell.classList.add('play-cursor');
+                }
+                
+                const container = document.querySelector('.grid-container');
+                const scrollTarget = (currentCol * 30) - (container.clientWidth / 2);
+                container.scrollLeft = Math.max(0, scrollTarget);
+                
+                lastCursorCol = currentCol;
+            }
+        });
+
+        audioPlayer.addEventListener('pause', clearCursor);
+        audioPlayer.addEventListener('ended', clearCursor);
+
+        function clearCursor() {
+            if (lastCursorCol >= 0) {
+                for (let r = 0; r < ROWS; r++) {
+                    const cell = document.getElementById(`cell-${r}-${lastCursorCol}`);
+                    if (cell) cell.classList.remove('play-cursor');
+                }
+                lastCursorCol = -1;
+            }
+        }
+
+        function initMap() {
+            mapData = Array(ROWS).fill().map(() => Array(COLS).fill('.'));
+            // Il pavimento ora è '=' e sta nell'ultima riga in basso
+            for(let c=0; c<COLS; c++) mapData[ROWS-1][c] = '='; 
+        }
+
+        function resizeGrid() {
+            const m = parseInt(document.getElementById('min').value) || 0;
+            const s = parseInt(document.getElementById('sec').value) || 0;
+            ROWS = parseInt(document.getElementById('rowsInput').value) || 10;
+            
+            const totalSeconds = (m * 60) + s;
+            if (totalSeconds <= 0) return;
+
+            COLS = totalSeconds * 10; 
+            infoEl.innerText = `Durata: ${m}m ${s}s (${COLS} blocchi). Righe: ${ROWS}. Vel: 10/sec.`;
+            initMap();
+            renderGrid();
+        }
+
+        function loadLevel() {
+            const text = outputEl.value.trim();
+            if (!text) return;
+            const lines = text.split('\n').map(l => l.replace(/\r/g, '')).filter(l => l.length > 0);
+            
+            ROWS = lines.length;
+            document.getElementById('rowsInput').value = ROWS;
+
+            COLS = lines[0].length;
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i].length !== COLS) { alert("Righe di lunghezza diversa."); return; }
+            }
+
+            const totalSeconds = Math.ceil(COLS / 10);
+            document.getElementById('min').value = Math.floor(totalSeconds / 60);
+            document.getElementById('sec').value = totalSeconds % 60;
+            infoEl.innerText = `Livello caricato: ${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s (${COLS} blocchi). Righe: ${ROWS}.`;
+
+            mapData = Array(ROWS).fill().map(() => Array(COLS).fill('.'));
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    mapData[r][c] = lines[r][c] || '.';
+                }
+            }
+            renderGrid();
+        }
+
+        async function fetchFromGitHub() {
+            const levelId = document.getElementById('levelId').value || "1";
+            const url = `https://raw.githubusercontent.com/neXPo83/tigtv/main/levels/level${levelId}.txt`;
+            
+            infoEl.innerText = `Connessione a GitHub per il livello ${levelId}...`;
+            
+            try {
+                const response = await fetch(url + '?t=' + new Date().getTime());
+                if (!response.ok) throw new Error("Livello non trovato");
+                
+                const text = await response.text();
+                outputEl.value = text;
+                loadLevel(); 
+                infoEl.innerText = `Livello ${levelId} scaricato con successo da GitHub!`;
+            } catch (e) {
+                alert(`Errore: Impossibile scaricare level${levelId}.txt da GitHub.\nForse non lo hai ancora caricato o il file non esiste.`);
+                infoEl.innerText = `Errore di download.`;
+            }
+        }
+
+        function downloadLevelFile() {
+            const levelId = document.getElementById('levelId').value || "1";
+            const fileName = `level${levelId}.txt`;
+            const textContent = outputEl.value;
+
+            if(!textContent) {
+                alert("La mappa è vuota!");
+                return;
+            }
+
+            const blob = new Blob([textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        document.getElementById('toolbar').addEventListener('click', (e) => {
+            const tool = e.target.closest('.tool');
+            if(!tool) return;
+            document.querySelectorAll('.tool').forEach(t => t.classList.remove('active'));
+            tool.classList.add('active');
+            currentBrush = tool.dataset.brush;
+        });
+
+        function renderGrid() {
+            gridEl.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
+            gridEl.innerHTML = '';
+            
+            const fragment = document.createDocumentFragment();
+            
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.id = `cell-${r}-${c}`;
+                    cell.dataset.val = mapData[r][c];
+                    cell.innerText = mapData[r][c];
+                    
+                    if (beatColumns.has(c)) {
+                        cell.classList.add('beat-marker');
+                    }
+                    
+                    cell.addEventListener('mousedown', () => paint(r, c, cell));
+                    cell.addEventListener('mouseenter', (e) => {
+                        if (e.buttons === 1) paint(r, c, cell); 
+                    });
+                    
+                    fragment.appendChild(cell);
+                }
+            }
+            gridEl.appendChild(fragment);
+            updateOutput();
+            validatePhysics();
+        }
+
+        function paint(r, c, cellEl) {
+            if (mapData[r][c] !== currentBrush) {
+                mapData[r][c] = currentBrush;
+                cellEl.dataset.val = currentBrush;
+                cellEl.innerText = currentBrush;
+                updateOutput();
+                validatePhysics();
+            }
+        }
+
+        function updateOutput() {
+            outputEl.value = mapData.map(row => row.join('')).join('\n');
+        }
+
+        function validatePhysics() {
+            let warnings = [];
+            for (let r = 0; r < ROWS; r++) {
+                let rowString = mapData[r].join('');
+                if (rowString.includes('^^^^')) { warnings.push("Troppe spine consecutive (max 3)."); break; }
+            }
+            let gapCount = 0;
+            for (let c = 0; c < COLS; c++) {
+                // Controlla l'ultima riga in basso per le voragini
+                if (mapData[ROWS-1][c] === '.') {
+                    gapCount++;
+                    if (gapCount >= 5) { warnings.push("Voragine incolmabile (max 4)."); break; }
+                } else { gapCount = 0; }
+            }
+            for (let c = 0; c < COLS; c++) {
+                let wallHeight = 0;
+                for (let r = ROWS - 1; r >= 1; r--) {
+                    if (mapData[r][c] === '#') wallHeight++;
+                    else wallHeight = 0;
+                    if (wallHeight >= 3) { warnings.push("Muro inarrivabile."); break; }
+                }
+            }
+            if (warnings.length > 0) {
+                warningEl.innerText = "⚠️ ATTENZIONE: " + warnings.join(" ");
+                warningEl.style.color = "#ff4444";
+            } else {
+                warningEl.innerText = "✔️ Livello fisicamente possibile.";
+                warningEl.style.color = "#00ff00";
+            }
+        }
+
+        initMap();
+        renderGrid();
+    </script>
+</body>
+</html>
         const outputEl = document.getElementById('output');
         const warningEl = document.getElementById('warning');
         const infoEl = document.getElementById('info');
