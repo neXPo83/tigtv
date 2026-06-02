@@ -11,6 +11,8 @@
         .setup-bar input[type="number"] { width: 50px; padding: 5px; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; }
         .setup-bar button { padding: 8px 12px; background: #0099ff; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
         .setup-bar button:hover { background: #007acc; }
+        .setup-bar .btn-danger { background: #dc3545; margin-left: 10px; }
+        .setup-bar .btn-danger:hover { background: #c82333; }
         .setup-bar .btn-import { background: #ff9900; }
         .setup-bar .btn-import:hover { background: #cc7a00; }
         .setup-bar .btn-save { background: #28a745; margin-left: auto; }
@@ -71,12 +73,13 @@
         <div class="level-selector">
             <label>ID Livello: </label>
             <input type="number" id="levelId" value="1" min="1">
-            <button class="btn-github" onclick="fetchFromGitHub()">☁️ Scarica da GitHub</button>
+            <button class="btn-github" onclick="fetchFromGitHub()">☁️ Scarica da GitHub (Livello + Audio)</button>
         </div>
         <label>Righe: <input type="number" id="rowsInput" value="10" min="4" max="50"></label>
         <label>Min: <input type="number" id="min" value="1" min="0"></label>
         <label>Sec: <input type="number" id="sec" value="30" min="0" max="59"></label>
-        <button onclick="resizeGrid()">2. Applica/Pulisci Mappa</button>
+        <button onclick="updateDimensions()">Applica Dimensioni</button>
+        <button class="btn-danger" onclick="clearMap()">Svuota Mappa</button>
         <button class="btn-import" onclick="loadLevel()">Carica da Testo in basso</button>
         
         <button class="btn-save" onclick="downloadLevelFile()">⬇️ Salva File TXT</button>
@@ -98,6 +101,386 @@
     
     <p style="margin-bottom: 5px; font-weight: bold; font-size: 14px;">Codice del livello:</p>
     <textarea id="output"></textarea>
+
+    <script>
+        let COLS = 900; 
+        let ROWS = parseInt(document.getElementById('rowsInput').value) || 10;
+        let currentBrush = '.';
+        const gridEl = document.getElementById('grid');
+        const outputEl = document.getElementById('output');
+        const warningEl = document.getElementById('warning');
+        const infoEl = document.getElementById('info');
+        let mapData = [];
+        let beatColumns = new Set();
+        let lastCursorCol = -1;
+
+        const audioInput = document.getElementById('audioInput');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const analysisStatus = document.getElementById('analysisStatus');
+
+        function skipAudio(seconds) {
+            if (audioPlayer.src) {
+                audioPlayer.currentTime += seconds;
+            }
+        }
+
+        async function analyzeAudioBuffer(arrayBuffer) {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                const duration = audioBuffer.duration;
+                document.getElementById('min').value = Math.floor(duration / 60);
+                document.getElementById('sec').value = Math.floor(duration % 60);
+                
+                // Aggiorna le colonne senza cancellare
+                updateDimensions();
+
+                const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+                const source = offlineCtx.createBufferSource();
+                source.buffer = audioBuffer;
+
+                const filter = offlineCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.value = 120; 
+
+                source.connect(filter);
+                filter.connect(offlineCtx.destination);
+                source.start();
+
+                const renderedBuffer = await offlineCtx.startRendering();
+                const data = renderedBuffer.getChannelData(0);
+
+                const samplesPerBlock = Math.floor(audioBuffer.sampleRate / 10);
+                const energies = [];
+                
+                for (let i = 0; i < COLS; i++) {
+                    let sum = 0;
+                    const start = i * samplesPerBlock;
+                    const end = Math.min(start + samplesPerBlock, data.length);
+                    if (start >= data.length) break;
+                    
+                    for (let j = start; j < end; j++) {
+                        sum += data[j] * data[j];
+                    }
+                    energies.push(Math.sqrt(sum / (end - start)));
+                }
+
+                beatColumns.clear();
+                const avgEnergy = energies.reduce((a, b) => a + b, 0) / energies.length;
+                const threshold = avgEnergy * 1.8; 
+
+                for (let i = 1; i < energies.length - 1; i++) {
+                    if (energies[i] > threshold && energies[i] > energies[i-1] && energies[i] > energies[i+1]) {
+                        beatColumns.add(i);
+                    }
+                }
+
+                analysisStatus.innerText = `Analisi completata. Trovati ${beatColumns.size} picchi ritmici. Ora puoi usare il player.`;
+                renderGrid(); 
+
+            } catch (err) {
+                console.error(err);
+                analysisStatus.innerText = "Errore durante l'analisi audio. Il player funzionerà comunque.";
+            }
+        }
+
+        audioInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            audioPlayer.src = URL.createObjectURL(file);
+            analysisStatus.innerText = "Analisi basse frequenze in corso (potrebbe richiedere qualche secondo)...";
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                await analyzeAudioBuffer(arrayBuffer);
+            } catch (err) {
+                console.error(err);
+                analysisStatus.innerText = "Impossibile leggere il file locale.";
+            }
+        });
+
+        audioPlayer.addEventListener('timeupdate', () => {
+            if (audioPlayer.paused && audioPlayer.currentTime === 0) return;
+            const currentSec = audioPlayer.currentTime;
+            const currentCol = Math.floor(currentSec * 10);
+            
+            if (currentCol !== lastCursorCol && currentCol < COLS) {
+                if (lastCursorCol >= 0) {
+                    for (let r = 0; r < ROWS; r++) {
+                        const cell = document.getElementById(`cell-${r}-${lastCursorCol}`);
+                        if (cell) cell.classList.remove('play-cursor');
+                    }
+                }
+                for (let r = 0; r < ROWS; r++) {
+                    const cell = document.getElementById(`cell-${r}-${currentCol}`);
+                    if (cell) cell.classList.add('play-cursor');
+                }
+                
+                const container = document.querySelector('.grid-container');
+                const scrollTarget = (currentCol * 30) - (container.clientWidth / 2);
+                container.scrollLeft = Math.max(0, scrollTarget);
+                
+                lastCursorCol = currentCol;
+            }
+        });
+
+        audioPlayer.addEventListener('pause', clearCursor);
+        audioPlayer.addEventListener('ended', clearCursor);
+
+        function clearCursor() {
+            if (lastCursorCol >= 0) {
+                for (let r = 0; r < ROWS; r++) {
+                    const cell = document.getElementById(`cell-${r}-${lastCursorCol}`);
+                    if (cell) cell.classList.remove('play-cursor');
+                }
+                lastCursorCol = -1;
+            }
+        }
+
+        function initMap() {
+            mapData = Array(ROWS).fill().map(() => Array(COLS).fill('.'));
+            for(let c=0; c<COLS; c++) mapData[ROWS-1][c] = '='; 
+        }
+
+        function clearMap() {
+            if(confirm("Sei sicuro di voler svuotare completamente la mappa?")) {
+                initMap();
+                renderGrid();
+            }
+        }
+
+        function updateDimensions() {
+            let newRows = parseInt(document.getElementById('rowsInput').value);
+            if(newRows < 4) { newRows = 4; document.getElementById('rowsInput').value = 4; }
+            
+            if(newRows > ROWS) {
+                let diff = newRows - ROWS;
+                for(let i=0; i<diff; i++) {
+                    mapData.unshift(Array(COLS).fill('.'));
+                }
+            } else if(newRows < ROWS) {
+                let diff = ROWS - newRows;
+                for(let i=0; i<diff; i++) {
+                    mapData.shift();
+                }
+            }
+            ROWS = newRows;
+
+            const m = parseInt(document.getElementById('min').value) || 0;
+            const s = parseInt(document.getElementById('sec').value) || 0;
+            const totalSeconds = (m * 60) + s;
+            
+            if (totalSeconds > 0) {
+                let newCols = totalSeconds * 10; 
+                if(newCols > COLS) {
+                    let diff = newCols - COLS;
+                    for(let r=0; r<ROWS; r++) {
+                        let fillChar = (r === ROWS - 1) ? '=' : '.';
+                        mapData[r].push(...Array(diff).fill(fillChar));
+                    }
+                } else if(newCols < COLS) {
+                    for(let r=0; r<ROWS; r++) {
+                        mapData[r].length = newCols;
+                    }
+                }
+                COLS = newCols;
+            }
+
+            infoEl.innerText = `Durata: ${Math.floor(COLS/10/60)}m ${(COLS/10)%60}s (${COLS} blocchi). Righe: ${ROWS}. Vel: 10/sec.`;
+            renderGrid();
+        }
+
+        function loadLevel() {
+            const text = outputEl.value.trim();
+            if (!text) return;
+            const lines = text.split('\n').map(l => l.replace(/\r/g, '')).filter(l => l.length > 0);
+            
+            ROWS = lines.length;
+            document.getElementById('rowsInput').value = ROWS;
+
+            COLS = lines[0].length;
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i].length !== COLS) { alert("Righe di lunghezza diversa."); return; }
+            }
+
+            const totalSeconds = Math.ceil(COLS / 10);
+            document.getElementById('min').value = Math.floor(totalSeconds / 60);
+            document.getElementById('sec').value = totalSeconds % 60;
+            infoEl.innerText = `Livello caricato: ${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s (${COLS} blocchi). Righe: ${ROWS}.`;
+
+            mapData = Array(ROWS).fill().map(() => Array(COLS).fill('.'));
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    mapData[r][c] = lines[r][c] || '.';
+                }
+            }
+            renderGrid();
+        }
+
+        async function fetchFromGitHub() {
+            const levelId = document.getElementById('levelId').value || "1";
+            const txtUrl = `https://raw.githubusercontent.com/neXPo83/tigtv/main/levels/level${levelId}.txt`;
+            const mp3Url = `https://raw.githubusercontent.com/neXPo83/tigtv/main/levels/level${levelId}.mp3`;
+            
+            infoEl.innerText = `Connessione a GitHub per il livello ${levelId}...`;
+            
+            try {
+                // Fetch testo
+                const responseTxt = await fetch(txtUrl + '?t=' + new Date().getTime());
+                if (!responseTxt.ok) throw new Error("File TXT non trovato");
+                const text = await responseTxt.text();
+                outputEl.value = text;
+                loadLevel(); 
+                
+                // Fetch Audio
+                analysisStatus.innerText = "Download MP3 da GitHub e analisi in corso...";
+                const responseMp3 = await fetch(mp3Url + '?t=' + new Date().getTime());
+                if (responseMp3.ok) {
+                    const arrayBuffer = await responseMp3.arrayBuffer();
+                    const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+                    audioPlayer.src = URL.createObjectURL(blob);
+                    await analyzeAudioBuffer(arrayBuffer);
+                } else {
+                    analysisStatus.innerText = "File MP3 associato non trovato su GitHub.";
+                }
+
+                infoEl.innerText = `Livello ${levelId} (Testo e Audio) scaricati con successo da GitHub!`;
+            } catch (e) {
+                alert(`Errore: Impossibile scaricare level${levelId} da GitHub.\nDettagli: ${e.message}`);
+                infoEl.innerText = `Errore di download.`;
+            }
+        }
+
+        function downloadLevelFile() {
+            const levelId = document.getElementById('levelId').value || "1";
+            const fileName = `level${levelId}.txt`;
+            const textContent = outputEl.value;
+
+            if(!textContent) {
+                alert("La mappa è vuota!");
+                return;
+            }
+
+            const blob = new Blob([textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        document.getElementById('toolbar').addEventListener('click', (e) => {
+            const tool = e.target.closest('.tool');
+            if(!tool) return;
+            document.querySelectorAll('.tool').forEach(t => t.classList.remove('active'));
+            tool.classList.add('active');
+            currentBrush = tool.dataset.brush;
+        });
+
+        function renderGrid() {
+            gridEl.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
+            gridEl.innerHTML = '';
+            
+            const fragment = document.createDocumentFragment();
+            
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.id = `cell-${r}-${c}`;
+                    cell.dataset.val = mapData[r][c];
+                    cell.innerText = mapData[r][c];
+                    
+                    if (beatColumns.has(c)) {
+                        cell.classList.add('beat-marker');
+                    }
+                    
+                    cell.addEventListener('mousedown', () => paint(r, c, cell));
+                    cell.addEventListener('mouseenter', (e) => {
+                        if (e.buttons === 1) paint(r, c, cell); 
+                    });
+                    
+                    fragment.appendChild(cell);
+                }
+            }
+            gridEl.appendChild(fragment);
+            updateOutput();
+            validatePhysics();
+        }
+
+        function paint(r, c, cellEl) {
+            if (mapData[r][c] !== currentBrush) {
+                mapData[r][c] = currentBrush;
+                cellEl.dataset.val = currentBrush;
+                cellEl.innerText = currentBrush;
+                updateOutput();
+                validatePhysics();
+            }
+        }
+
+        function updateOutput() {
+            outputEl.value = mapData.map(row => row.join('')).join('\n');
+        }
+
+        function validatePhysics() {
+            let warnings = [];
+            
+            // 1. Spine consecutive
+            for (let r = 0; r < ROWS; r++) {
+                let rowString = mapData[r].join('');
+                if (rowString.includes('^^^^')) { warnings.push("Troppe spine consecutive (max 3)."); break; }
+            }
+            
+            // 2. Voragini
+            let gapCount = 0;
+            for (let c = 0; c < COLS; c++) {
+                if (mapData[ROWS-1][c] === '.') {
+                    gapCount++;
+                    if (gapCount >= 5) { warnings.push("Voragine incolmabile (max 4)."); break; }
+                } else { gapCount = 0; }
+            }
+            
+            // 3. Delta Height (Muro inarrivabile relativo al piano di partenza)
+            let lastHeight = 0;
+            for (let c = 0; c < COLS; c++) {
+                let currentHeight = 0; 
+                for (let r = 0; r < ROWS; r++) {
+                    if (mapData[r][c] === '#' || mapData[r][c] === '=') {
+                        currentHeight = ROWS - r;
+                        break;
+                    }
+                }
+                
+                // Se il dislivello tra la colonna precedente calpestabile e quella attuale è superiore a 3, è un muro
+                if (c > 0 && currentHeight - lastHeight > 3) {
+                    warnings.push(`Muro inarrivabile a colonna ${c}.`); 
+                    break;
+                }
+                
+                if (currentHeight > 0) {
+                    lastHeight = currentHeight;
+                }
+            }
+            
+            if (warnings.length > 0) {
+                warningEl.innerText = "⚠️ ATTENZIONE: " + warnings.join(" ");
+                warningEl.style.color = "#ff4444";
+            } else {
+                warningEl.innerText = "✔️ Livello fisicamente possibile.";
+                warningEl.style.color = "#00ff00";
+            }
+        }
+
+        initMap();
+        renderGrid();
+    </script>
+</body>
+</html>
 
     <script>
         let COLS = 900; 
