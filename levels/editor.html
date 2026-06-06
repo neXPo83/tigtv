@@ -430,64 +430,96 @@
         }
 
         function validatePhysics() {
-            let warnings = [];
-            
-            // 1. Controllo Spine Consecutive (max 3 calcolando lo spazio di salto)
-            for (let r = 0; r < ROWS; r++) {
-                let rowString = mapData[r].join('');
-                if (rowString.includes('^^^^')) { 
-                    warnings.push(`- Troppe spine consecutive alla riga ${r + 1} (max 3).`); 
+    let warnings = [];
+    
+    // 1. Controllo Spine Consecutive
+    for (let r = 0; r < ROWS; r++) {
+        let rowString = mapData[r].join('');
+        if (rowString.includes('^^^^')) { 
+            warnings.push(`- Troppe spine consecutive alla riga ${r + 1} (max 3).`); 
+        }
+    }
+    
+    // 2. Troviamo tutte le "superfici calpestabili" per ogni colonna
+    let surfacesByCol = [];
+    for (let c = 0; c < COLS; c++) {
+        let colSurfaces = [];
+        for (let r = 0; r < ROWS; r++) {
+            let cell = mapData[r][c];
+            // Se è un blocco solido su cui si può stare...
+            if (cell === '#' || cell === '=' || cell === 'C') {
+                // ...ed è in cima alla mappa, oppure ha aria/spina direttamente sopra di esso
+                if (r === 0 || mapData[r-1][c] === '.' || mapData[r-1][c] === '^') {
+                    colSurfaces.push(ROWS - r); // Salviamo la sua altezza partendo dal basso
                 }
-            }
-            
-            let gapCount = 0;
-            let lastHeight = -1;
-            
-            // 2. Controllo Altezze (Muri) e Voragini colonna per colonna
-            for (let c = 0; c < COLS; c++) {
-                let currentHeight = -1; // -1 rappresenta una colonna vuota/voragine
-                
-                for (let r = 0; r < ROWS; r++) {
-                    // Cerchiamo il punto d'appoggio più alto (Pavimento, Blocco solido o Checkpoint)
-                    if (mapData[r][c] === '#' || mapData[r][c] === '=' || mapData[r][c] === 'C') {
-                        currentHeight = ROWS - r;
-                        break;
-                    }
-                }
-                
-                // Analisi Voragine
-                if (currentHeight === -1) {
-                    gapCount++;
-                    if (gapCount >= 5 && !warnings.some(w => w.includes("Voragine"))) { 
-                        warnings.push(`- Voragine incolmabile intorno alla colonna ${c} (max 4).`); 
-                    }
-                } else {
-                    gapCount = 0;
-                }
-                
-                // Analisi Muri (Altezza salto)
-                if (currentHeight !== -1 && lastHeight !== -1 && c > 0) {
-                    let delta = currentHeight - lastHeight;
-                    // L'altezza massima di salto del giocatore è di circa 2.5 blocchi. 
-                    // Un salto verticale di 3 blocchi o superiore non è superabile.
-                    if (delta >= 3 && !warnings.some(w => w.includes(`Muro inarrivabile a colonna ${c}`))) { 
-                        warnings.push(`- Muro inarrivabile a colonna ${c} (salto massimo superabile: 2 blocchi).`); 
-                    }
-                }
-                
-                if (currentHeight !== -1) {
-                    lastHeight = currentHeight;
-                }
-            }
-            
-            if (warnings.length > 0) {
-                warningEl.innerText = "⚠️ ATTENZIONE:\n" + warnings.join("\n");
-                warningEl.style.color = "#ff4444";
-            } else {
-                warningEl.innerText = "✔️ Livello fisicamente possibile.";
-                warningEl.style.color = "#00ff00";
             }
         }
+        surfacesByCol.push(colSurfaces);
+    }
+
+    let gapCount = 0;
+    
+    // 3. Controllo Altezze (Muri) e Voragini valutando i percorsi
+    for (let c = 0; c < COLS; c++) {
+        let currentSurfaces = surfacesByCol[c];
+        
+        // Analisi Voragine
+        if (currentSurfaces.length === 0) {
+            gapCount++;
+            if (gapCount >= 5 && !warnings.some(w => w.includes("Voragine"))) { 
+                warnings.push(`- Voragine incolmabile intorno alla colonna ${c} (max 4 blocchi vuoti).`); 
+            }
+        } else {
+            gapCount = 0;
+        }
+        
+        // Analisi Muri (Altezza salto)
+        if (c > 0 && currentSurfaces.length > 0) {
+            // Troviamo le superfici della colonna precedente (se c'è un buco, cerchiamo indietro fino a 4 blocchi)
+            let prevSurfaces = [];
+            for (let lookBack = 1; lookBack <= 4; lookBack++) {
+                if (c - lookBack >= 0 && surfacesByCol[c - lookBack].length > 0) {
+                    prevSurfaces = surfacesByCol[c - lookBack];
+                    break; 
+                }
+            }
+
+            if (prevSurfaces.length > 0) {
+                let canPassColumn = false;
+                
+                // Verifichiamo se ESISTE un percorso: c'è almeno una superficie attuale 
+                // raggiungibile da almeno una superficie precedente?
+                for (let hCurr of currentSurfaces) {
+                    for (let hPrev of prevSurfaces) {
+                        let delta = hCurr - hPrev;
+                        // Il salto in alto è fattibile se il delta è <= 2.
+                        // I salti in basso (delta negativo) sono sempre permessi.
+                        if (delta <= 2) { 
+                            canPassColumn = true;
+                            break;
+                        }
+                    }
+                    if (canPassColumn) break;
+                }
+                
+                // Se non c'è nessun percorso valido tra le superfici trovate, dà l'errore
+                if (!canPassColumn && !warnings.some(w => w.includes(`Muro inarrivabile a colonna ${c}`))) {
+                    warnings.push(`- Muro inarrivabile a colonna ${c} (nessun passaggio con salto <= 2 blocchi).`); 
+                }
+            }
+        }
+    }
+    
+    // Stampa messaggi
+    if (warnings.length > 0) {
+        warningEl.innerText = "⚠️ ATTENZIONE:\n" + warnings.join("\n");
+        warningEl.style.color = "#ff4444";
+    } else {
+        warningEl.innerText = "✔️ Livello fisicamente possibile.";
+        warningEl.style.color = "#00ff00";
+    }
+}
+
 
         initMap();
         renderGrid();
