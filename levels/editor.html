@@ -45,8 +45,11 @@
         .cell[data-val="^"] { background: #2a3b4c; color: yellow; font-size: 24px; } 
         .cell[data-val="C"] { background: #00ff00; color: #000; border: 2px solid #000; box-sizing: border-box; font-weight: bold; } 
         
-        /* Stili per le Rampe */
-        .cell[data-val="◢"], .cell[data-val="◣"] { background: #6c757d; color: #fff; font-size: 24px; }
+        /* Stili per le Rampe Dolci usando i numeri */
+        .cell[data-val="1"] { background: #0099ff; clip-path: polygon(0% 100%, 100% 50%, 100% 100%); color: transparent; border-bottom: 2px solid #000; }
+        .cell[data-val="2"] { background: #0099ff; clip-path: polygon(0% 50%, 100% 0%, 100% 100%, 0% 100%); color: transparent; border-bottom: 2px solid #000; }
+        .cell[data-val="3"] { background: #0099ff; clip-path: polygon(0% 0%, 100% 50%, 100% 100%, 0% 100%); color: transparent; border-bottom: 2px solid #000; }
+        .cell[data-val="4"] { background: #0099ff; clip-path: polygon(0% 50%, 100% 100%, 0% 100%); color: transparent; border-bottom: 2px solid #000; }
 
         .cell.beat-marker[data-val="."] { background: #5c2a2a; border-left: 1px solid #ff4444; } 
         .cell.play-cursor { background: #00ffcc !important; opacity: 0.8; }
@@ -77,14 +80,14 @@
         <div class="level-selector">
             <label>ID Livello: </label>
             <input type="number" id="levelId" value="1" min="1">
-            <button class="btn-github" onclick="fetchFromGitHub()">☁️ Scarica da GitHub (Livello + Audio)</button>
+            <button class="btn-github" onclick="fetchFromGitHub()">☁️ Scarica da GitHub</button>
         </div>
         <label>Righe: <input type="number" id="rowsInput" value="10" min="4" max="50"></label>
         <label>Min: <input type="number" id="min" value="1" min="0"></label>
         <label>Sec: <input type="number" id="sec" value="30" min="0" max="59"></label>
         <button onclick="updateDimensions()">Applica Dimensioni</button>
         <button class="btn-danger" onclick="clearMap()">Svuota Mappa</button>
-        <button class="btn-import" onclick="loadLevel()">Carica da Testo in basso</button>
+        <button class="btn-import" onclick="loadLevel()">Carica da Testo</button>
         
         <button class="btn-save" onclick="downloadLevelFile()">⬇️ Salva File TXT</button>
     </div>
@@ -95,8 +98,10 @@
         <div class="tool" data-brush="#">Blocco (#)</div>
         <div class="tool" data-brush="^">Spina (^)</div>
         <div class="tool" data-brush="C">Checkpoint (C)</div>
-        <div class="tool" data-brush="◢">Rampa Dx (◢)</div>
-        <div class="tool" data-brush="◣">Rampa Sx (◣)</div>
+        <div class="tool" data-brush="1">Salita Bassa (1)</div>
+        <div class="tool" data-brush="2">Salita Alta (2)</div>
+        <div class="tool" data-brush="3">Discesa Alta (3)</div>
+        <div class="tool" data-brush="4">Discesa Bassa (4)</div>
     </div>
     
     <div id="info">Durata attuale: 1m 30s (900 blocchi). Righe: 10. Velocità: 10 blocchi/sec.</div>
@@ -106,7 +111,7 @@
         <div class="grid" id="grid"></div>
     </div>
     
-    <p style="margin-bottom: 5px; font-weight: bold; font-size: 14px;">Codice del livello:</p>
+    <p style="margin-bottom: 5px; font-weight: bold; font-size: 14px;">Codice del livello (USA I NUMERI 1,2,3,4 PER LE RAMPE):</p>
     <textarea id="output"></textarea>
 
     <script>
@@ -159,14 +164,12 @@
                 }
 
                 beatColumns.clear();
-                
                 const windowSize = 10; 
                 const sensitivity = 1.3; 
 
                 for (let i = 2; i < energies.length - 2; i++) {
                     let localSum = 0;
                     let count = 0;
-                    
                     let startWindow = Math.max(0, i - windowSize);
                     let endWindow = Math.min(energies.length - 1, i + windowSize);
                     
@@ -174,7 +177,6 @@
                         localSum += energies[w];
                         count++;
                     }
-                    
                     let localAvg = localSum / count;
                     let threshold = localAvg * sensitivity;
 
@@ -187,10 +189,9 @@
 
                 analysisStatus.innerText = `Analisi completata. Trovati ${beatColumns.size} picchi ritmici.`;
                 renderGrid(); 
-
             } catch (err) {
                 console.error(err);
-                analysisStatus.innerText = "Errore durante l'analisi audio. Il player funzionerà comunque.";
+                analysisStatus.innerText = "Errore durante l'analisi audio.";
             }
         }
 
@@ -198,13 +199,12 @@
             const file = e.target.files[0];
             if (!file) return;
             audioPlayer.src = URL.createObjectURL(file);
-            analysisStatus.innerText = "Analisi volume e picchi in corso (potrebbe richiedere qualche secondo)...";
+            analysisStatus.innerText = "Analisi volume e picchi in corso...";
             try {
                 const arrayBuffer = await file.arrayBuffer();
                 await analyzeAudioBuffer(arrayBuffer);
             } catch (err) {
                 console.error(err);
-                analysisStatus.innerText = "Impossibile leggere il file locale.";
             }
         });
 
@@ -224,11 +224,9 @@
                     const cell = document.getElementById(`cell-${r}-${currentCol}`);
                     if (cell) cell.classList.add('play-cursor');
                 }
-                
                 const container = document.querySelector('.grid-container');
                 const scrollTarget = (currentCol * 30) - (container.clientWidth / 2);
                 container.scrollLeft = Math.max(0, scrollTarget);
-                
                 lastCursorCol = currentCol;
             }
         });
@@ -264,14 +262,10 @@
             
             if(newRows > ROWS) {
                 let diff = newRows - ROWS;
-                for(let i=0; i<diff; i++) {
-                    mapData.unshift(Array(COLS).fill('.'));
-                }
+                for(let i=0; i<diff; i++) mapData.unshift(Array(COLS).fill('.'));
             } else if(newRows < ROWS) {
                 let diff = ROWS - newRows;
-                for(let i=0; i<diff; i++) {
-                    mapData.shift();
-                }
+                for(let i=0; i<diff; i++) mapData.shift();
             }
             ROWS = newRows;
 
@@ -288,9 +282,7 @@
                         mapData[r].push(...Array(diff).fill(fillChar));
                     }
                 } else if(newCols < COLS) {
-                    for(let r=0; r<ROWS; r++) {
-                        mapData[r].length = newCols;
-                    }
+                    for(let r=0; r<ROWS; r++) mapData[r].length = newCols;
                 }
                 COLS = newCols;
             }
@@ -306,11 +298,7 @@
             
             ROWS = lines.length;
             document.getElementById('rowsInput').value = ROWS;
-
             COLS = lines[0].length;
-            for (let i = 1; i < lines.length; i++) {
-                if (lines[i].length !== COLS) { alert("Righe di lunghezza diversa."); return; }
-            }
 
             const totalSeconds = Math.ceil(COLS / 10);
             document.getElementById('min').value = Math.floor(totalSeconds / 60);
@@ -330,55 +318,36 @@
             const levelId = document.getElementById('levelId').value || "1";
             const txtUrl = `https://raw.githubusercontent.com/neXPo83/tigtv/main/levels/level${levelId}.txt`;
             const mp3Url = `https://raw.githubusercontent.com/neXPo83/tigtv/main/levels/level${levelId}.mp3`;
-            
             infoEl.innerText = `Connessione a GitHub per il livello ${levelId}...`;
             
             try {
                 const responseTxt = await fetch(txtUrl + '?t=' + new Date().getTime());
                 if (!responseTxt.ok) throw new Error("File TXT non trovato");
-                const text = await responseTxt.text();
-                outputEl.value = text;
+                outputEl.value = await responseTxt.text();
                 loadLevel(); 
                 
-                analysisStatus.innerText = "Download MP3 da GitHub e analisi in corso...";
                 const responseMp3 = await fetch(mp3Url + '?t=' + new Date().getTime());
                 if (responseMp3.ok) {
                     const arrayBuffer = await responseMp3.arrayBuffer();
-                    const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
-                    audioPlayer.src = URL.createObjectURL(blob);
+                    audioPlayer.src = URL.createObjectURL(new Blob([arrayBuffer], { type: 'audio/mpeg' }));
                     await analyzeAudioBuffer(arrayBuffer);
-                } else {
-                    analysisStatus.innerText = "File MP3 associato non trovato su GitHub.";
                 }
-
-                infoEl.innerText = `Livello ${levelId} (Testo e Audio) scaricati con successo da GitHub!`;
+                infoEl.innerText = `Livello ${levelId} scaricato con successo!`;
             } catch (e) {
-                alert(`Errore: Impossibile scaricare level${levelId} da GitHub.\nDettagli: ${e.message}`);
+                alert(`Errore: ${e.message}`);
                 infoEl.innerText = `Errore di download.`;
             }
         }
 
         function downloadLevelFile() {
             const levelId = document.getElementById('levelId').value || "1";
-            const fileName = `level${levelId}.txt`;
-            const textContent = outputEl.value;
-
-            if(!textContent) {
-                alert("La mappa è vuota!");
-                return;
-            }
-
-            const blob = new Blob([textContent], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            
+            if(!outputEl.value) { alert("La mappa è vuota!"); return; }
             const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
+            a.href = URL.createObjectURL(new Blob([outputEl.value], { type: 'text/plain' }));
+            a.download = `level${levelId}.txt`;
             document.body.appendChild(a);
             a.click();
-            
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         }
 
         document.getElementById('toolbar').addEventListener('click', (e) => {
@@ -392,9 +361,7 @@
         function renderGrid() {
             gridEl.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
             gridEl.innerHTML = '';
-            
             const fragment = document.createDocumentFragment();
-            
             for (let r = 0; r < ROWS; r++) {
                 for (let c = 0; c < COLS; c++) {
                     const cell = document.createElement('div');
@@ -402,16 +369,9 @@
                     cell.id = `cell-${r}-${c}`;
                     cell.dataset.val = mapData[r][c];
                     cell.innerText = mapData[r][c];
-                    
-                    if (beatColumns.has(c)) {
-                        cell.classList.add('beat-marker');
-                    }
-                    
+                    if (beatColumns.has(c)) cell.classList.add('beat-marker');
                     cell.addEventListener('mousedown', () => paint(r, c, cell));
-                    cell.addEventListener('mouseenter', (e) => {
-                        if (e.buttons === 1) paint(r, c, cell); 
-                    });
-                    
+                    cell.addEventListener('mouseenter', (e) => { if (e.buttons === 1) paint(r, c, cell); });
                     fragment.appendChild(cell);
                 }
             }
@@ -436,12 +396,8 @@
 
         function validatePhysics() {
             let warnings = [];
-            
             for (let r = 0; r < ROWS; r++) {
-                let rowString = mapData[r].join('');
-                if (rowString.includes('^^^^')) { 
-                    warnings.push(`- Troppe spine consecutive alla riga ${r + 1} (max 3).`); 
-                }
+                if (mapData[r].join('').includes('^^^^')) warnings.push(`- Troppe spine consecutive alla riga ${r + 1} (max 3).`); 
             }
             
             let surfacesByCol = [];
@@ -449,7 +405,8 @@
                 let colSurfaces = [];
                 for (let r = 0; r < ROWS; r++) {
                     let cell = mapData[r][c];
-                    if (cell === '#' || cell === '=' || cell === 'C' || cell === '◢' || cell === '◣') { 
+                    // Numeri 1,2,3,4 inclusi come superfici calpestabili
+                    if (cell === '#' || cell === '=' || cell === 'C' || ['1','2','3','4'].includes(cell)) { 
                         if (r === 0 || mapData[r-1][c] === '.' || mapData[r-1][c] === '^') {
                             colSurfaces.push(ROWS - r); 
                         }
@@ -458,46 +415,23 @@
                 surfacesByCol.push(colSurfaces);
             }
 
-            let gapCount = 0;
-            
             for (let c = 0; c < COLS; c++) {
                 let currentSurfaces = surfacesByCol[c];
-                
-                if (currentSurfaces.length === 0) {
-                    gapCount++;
-                    if (gapCount >= 5 && !warnings.some(w => w.includes("Voragine"))) { 
-                        warnings.push(`- Voragine incolmabile intorno alla colonna ${c} (max 4 blocchi vuoti).`); 
-                    }
-                } else {
-                    gapCount = 0;
-                }
-                
                 if (c > 0 && currentSurfaces.length > 0) {
-                    let prevSurfaces = [];
-                    for (let lookBack = 1; lookBack <= 4; lookBack++) {
-                        if (c - lookBack >= 0 && surfacesByCol[c - lookBack].length > 0) {
-                            prevSurfaces = surfacesByCol[c - lookBack];
-                            break; 
-                        }
-                    }
-
-                    if (prevSurfaces.length > 0) {
-                        let canPassColumn = false;
-                        
-                        for (let hCurr of currentSurfaces) {
-                            for (let hPrev of prevSurfaces) {
-                                let delta = hCurr - hPrev;
-                                if (delta <= 2) { 
-                                    canPassColumn = true;
-                                    break;
+                    let canPassColumn = false;
+                    for (let hCurr of currentSurfaces) {
+                        for (let lookBack = 1; lookBack <= 4; lookBack++) {
+                            if (c - lookBack >= 0) {
+                                for (let hPrev of surfacesByCol[c - lookBack]) {
+                                    if (hCurr - hPrev <= 2) { canPassColumn = true; break; }
                                 }
                             }
                             if (canPassColumn) break;
                         }
-                        
-                        if (!canPassColumn && !warnings.some(w => w.includes(`Muro inarrivabile a colonna ${c}`))) {
-                            warnings.push(`- Muro inarrivabile a colonna ${c} (nessun passaggio con salto <= 2 blocchi).`); 
-                        }
+                        if (canPassColumn) break;
+                    }
+                    if (!canPassColumn && !warnings.some(w => w.includes(`Muro inarrivabile a colonna ${c}`))) {
+                        warnings.push(`- Muro inarrivabile a colonna ${c} (nessun passaggio con salto <= 2 blocchi).`); 
                     }
                 }
             }
