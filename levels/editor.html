@@ -126,68 +126,80 @@
             }
         }
 
-        async function analyzeAudioBuffer(arrayBuffer) {
-            try {
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                
-                const duration = audioBuffer.duration;
-                document.getElementById('min').value = Math.floor(duration / 60);
-                document.getElementById('sec').value = Math.floor(duration % 60);
-                
-                updateDimensions();
+async function analyzeAudioBuffer(arrayBuffer) {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        
+        const duration = audioBuffer.duration;
+        document.getElementById('min').value = Math.floor(duration / 60);
+        document.getElementById('sec').value = Math.floor(duration % 60);
+        
+        updateDimensions();
 
-                const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
-                const source = offlineCtx.createBufferSource();
-                source.buffer = audioBuffer;
+        // Rimosso il BiquadFilter e l'OfflineAudioContext.
+        // Leggiamo i dati grezzi per catturare rullanti, clap, voci e synth.
+        const data = audioBuffer.getChannelData(0); 
+        const samplesPerBlock = Math.floor(audioBuffer.sampleRate / 10);
+        const energies = [];
+        
+        // 1. Calcolo dell'energia RMS per ogni blocco (0.1s)
+        for (let i = 0; i < COLS; i++) {
+            let sum = 0;
+            const start = i * samplesPerBlock;
+            const end = Math.min(start + samplesPerBlock, data.length);
+            if (start >= data.length) break;
+            
+            for (let j = start; j < end; j++) {
+                sum += data[j] * data[j];
+            }
+            energies.push(Math.sqrt(sum / (end - start)));
+        }
 
-                const filter = offlineCtx.createBiquadFilter();
-                filter.type = 'lowpass';
-                filter.frequency.value = 120; 
+        beatColumns.clear();
+        
+        // 2. Calcolo dinamico con Media Mobile
+        const windowSize = 10; // Guarda 1 secondo prima e 1 secondo dopo (10 blocchi)
+        
+        // SOGLIA DI SENSIBILITÀ:
+        // 1.3 è un buon compromesso. 
+        // Se trovi troppi blocchi, alzala a 1.5 o 1.6. 
+        // Se ne trovi troppo pochi, abbassala a 1.1 o 1.2.
+        const sensitivity = 1.3; 
 
-                source.connect(filter);
-                filter.connect(offlineCtx.destination);
-                source.start();
+        for (let i = 2; i < energies.length - 2; i++) {
+            let localSum = 0;
+            let count = 0;
+            
+            // Calcola la media solo nell'intorno di questo specifico istante
+            let startWindow = Math.max(0, i - windowSize);
+            let endWindow = Math.min(energies.length - 1, i + windowSize);
+            
+            for (let w = startWindow; w <= endWindow; w++) {
+                localSum += energies[w];
+                count++;
+            }
+            
+            let localAvg = localSum / count;
+            let threshold = localAvg * sensitivity;
 
-                const renderedBuffer = await offlineCtx.startRendering();
-                const data = renderedBuffer.getChannelData(0);
-
-                const samplesPerBlock = Math.floor(audioBuffer.sampleRate / 10);
-                const energies = [];
-                
-                for (let i = 0; i < COLS; i++) {
-                    let sum = 0;
-                    const start = i * samplesPerBlock;
-                    const end = Math.min(start + samplesPerBlock, data.length);
-                    if (start >= data.length) break;
-                    
-                    for (let j = start; j < end; j++) {
-                        sum += data[j] * data[j];
-                    }
-                    energies.push(Math.sqrt(sum / (end - start)));
-                }
-
-                beatColumns.clear();
-                const avgEnergy = energies.reduce((a, b) => a + b, 0) / energies.length;
-                const threshold = avgEnergy * 1.5; 
-
-                // Utilizzo una finestra mobile di 5 colonne per trovare i picchi veri ed evitare linee affollate
-                for (let i = 2; i < energies.length - 2; i++) {
-                    if (energies[i] > threshold && 
-                        energies[i] > energies[i-1] && energies[i] > energies[i-2] &&
-                        energies[i] > energies[i+1] && energies[i] > energies[i+2]) {
-                        beatColumns.add(i);
-                    }
-                }
-
-                analysisStatus.innerText = `Analisi completata. Trovati ${beatColumns.size} picchi ritmici (BPM/Kick isolati).`;
-                renderGrid(); 
-
-            } catch (err) {
-                console.error(err);
-                analysisStatus.innerText = "Errore durante l'analisi audio. Il player funzionerà comunque.";
+            // Trova i picchi isolati rispetto al volume locale
+            if (energies[i] > threshold && 
+                energies[i] > energies[i-1] && energies[i] > energies[i-2] &&
+                energies[i] > energies[i+1] && energies[i] > energies[i+2]) {
+                beatColumns.add(i);
             }
         }
+
+        analysisStatus.innerText = `Analisi completata. Trovati ${beatColumns.size} picchi ritmici.`;
+        renderGrid(); 
+
+    } catch (err) {
+        console.error(err);
+        analysisStatus.innerText = "Errore durante l'analisi audio. Il player funzionerà comunque.";
+    }
+}
+
 
         audioInput.addEventListener('change', async function(e) {
             const file = e.target.files[0];
