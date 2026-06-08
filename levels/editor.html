@@ -42,7 +42,8 @@
         .cell[data-val="."] { background: #2a3b4c; color: transparent; } 
         .cell[data-val="="] { background: #ffffff; color: #000; } 
         .cell[data-val="#"] { background: #0099ff; border: 2px solid #000; box-sizing: border-box; }
-        .cell[data-val="H"] { background: #0099ff; height: 15px; margin-top: 15px; border: 2px solid #000; box-sizing: border-box; } 
+        .cell[data-val="H"] { background: #0099ff; height: 15px; margin-top: 15px; border: 2px solid #000; box-sizing: border-box; color: transparent; } 
+        .cell[data-val="T"] { background: #0099ff; height: 15px; margin-bottom: 15px; border: 2px solid #000; box-sizing: border-box; color: transparent; } 
         .cell[data-val="^"] { background: #2a3b4c; color: yellow; font-size: 24px; } 
         .cell[data-val="v"] { background: #2a3b4c; color: yellow; font-size: 24px; } 
         .cell[data-val="C"] { background: #00ff00; color: #000; border: 2px solid #000; box-sizing: border-box; font-weight: bold; } 
@@ -96,7 +97,8 @@
         <div class="tool active" data-brush=".">Aria (.)</div>
         <div class="tool" data-brush="=">Pavimento (=)</div>
         <div class="tool" data-brush="#">Blocco (#)</div>
-        <div class="tool" data-brush="H">Mezzo Blocco (H)</div>
+        <div class="tool" data-brush="H">Mezzo Basso (H)</div>
+        <div class="tool" data-brush="T">Mezzo Alto (T)</div>
         <div class="tool" data-brush="^">Spina Su (^)</div>
         <div class="tool" data-brush="v">Spina Giù (v)</div>
         <div class="tool" data-brush="C">Check (C)</div>
@@ -191,18 +193,48 @@
         function clearMap() { if(confirm("Svuotare mappa?")) { initMap(); renderGrid(); } }
 
         function updateDimensions() {
-            ROWS = parseInt(document.getElementById('rowsInput').value);
+            const newRows = parseInt(document.getElementById('rowsInput').value) || 10;
             const totalSeconds = (parseInt(document.getElementById('min').value) * 60) + parseInt(document.getElementById('sec').value);
-            COLS = totalSeconds * 10;
-            initMap();
+            const newCols = totalSeconds * 10;
+
+            let newMapData = Array(newRows).fill().map(() => Array(newCols).fill('.'));
+
+            // Copia conservativa dei blocchi esistenti
+            for (let r = 0; r < Math.min(ROWS, newRows); r++) {
+                for (let c = 0; c < Math.min(COLS, newCols); c++) {
+                    newMapData[r][c] = mapData[r][c] || '.';
+                }
+            }
+
+            // Aggiunge il pavimento di default se la traccia è stata allungata
+            if (newCols > COLS) {
+                for(let c = COLS; c < newCols; c++) {
+                    newMapData[newRows-1][c] = '=';
+                }
+            }
+
+            ROWS = newRows;
+            COLS = newCols;
+            mapData = newMapData;
+
+            infoEl.innerText = `Durata attuale: ${Math.floor(COLS/10/60)}m ${Math.floor((COLS/10)%60)}s (${COLS} blocchi). Righe: ${ROWS}. Velocità: 10 blocchi/sec.`;
             renderGrid();
         }
 
         function loadLevel() {
             const lines = outputEl.value.trim().split('\n');
+            if (!lines || lines.length === 0 || lines[0] === '') return;
+            
             ROWS = lines.length;
             COLS = lines[0].length;
             mapData = lines.map(l => l.split(''));
+            
+            document.getElementById('rowsInput').value = ROWS;
+            document.getElementById('min').value = Math.floor((COLS / 10) / 60);
+            document.getElementById('sec').value = Math.floor((COLS / 10) % 60);
+            
+            infoEl.innerText = `Durata attuale: ${Math.floor(COLS/10/60)}m ${Math.floor((COLS/10)%60)}s (${COLS} blocchi). Righe: ${ROWS}. Velocità: 10 blocchi/sec.`;
+            
             renderGrid();
         }
 
